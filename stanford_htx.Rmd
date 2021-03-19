@@ -1,0 +1,184 @@
+---
+title: "Survival analysis for the Stanford Heart Transplant Data"
+author: "Oleg Kufirin"
+date: "19/03/2021"
+output:
+  slidy_presentation: default
+  ioslides_presentation: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(comment = NA)
+```
+
+
+
+## Dataset
+
+[Link to the interactive Shiny app](https://oleg-kufirin.shinyapps.io/HTx_Survival_Analysis/)
+
+<div style="text-align: justify">
+Time-dependent variables can be used to model the effects of subjects 
+transferring from one treatment group to another. One example of the need for 
+such strategies is the Stanford heart transplant program. Patients are accepted 
+if physicians judge them suitable for heart transplant. Then, when a donor 
+becomes available, physicians choose transplant recipients according to various 
+medical criteria. A patient's status can be changed during the study from 
+waiting for a transplant to transplant recipient. 
+
+Crowley and Hu (J. Amer. Statist. Assoc., 1977) describe a program at Stanford 
+University where 103 patients were registered to recieve a heart transplant and 
+were followed until death or censorship. Of these, 65 received transplants 
+during follow-up, whereas 38 did not.
+</div>
+
+Here is the head of the dataset imported from *p3state.msm* package:
+
+```{r warning=FALSE, message=FALSE}
+library(survival)
+library(survminer)
+library(p3state.msm)
+library(Hmisc)
+data(heart2)
+head(heart2)
+```
+
+[Reference to the dataset description](https://rdrr.io/cran/p3state.msm/man/heart2.html)
+
+
+
+## Study question
+
+<div style="text-align: justify">
+In this project we would like to assess the impact of the following
+characteristics of patients from the heart transplant waiting list on their 
+survival. 
+
+- Transplant event. Do patients with transplanted hearts live longer?
+- Age group. Do certain age groups have better or worse prognosis?
+- Year group. Is there any difference in survival of patients from different
+groups of time of acceptance into the program after 1 Nov 1967?
+- Surgery. Does having a prior bypass surgery lead to better or worse prognosis?
+
+To do this we will apply Kaplan-Meier estimate and Cox Proportional Hazard Model.
+The app allows manipulation of model parameters and visualises survival curves.
+
+#### Data preparation
+Variables *times1* and *times2* were ignored for the analysis. Variable
+*delta* was renamed to *Transplant*. Variable *age* was brought to the original
+scale and categorised to *Age Group*. Variable *year* was also categorised 
+to *Year Group*.
+</div>
+
+
+
+## Kaplan-Meier Survival Estimate
+
+<div style="text-align: justify">
+On the first tab of the app a user can see the Kaplan-Meier Survival Curve and 
+the Cumulative Hazard Curve for chosen variable of interest. All variables are
+categorical and described in the data dictionary at the bottom of the left panel. 
+A user can choose factor of interest from Stratification Factor drop-down list.
+
+Below is an example of a KM curve for Age Group variable. As it can be seen
+younger patients below 40 have better survival outcome given they are 
+accepted in the waiting list. This is not a surprising result but it shows
+how other variables can be explored in a similar fashion.
+</div>
+
+```{r warning=FALSE, message=FALSE, out.width="45%", fig.align='center'}
+# -------------------------------------------------------------
+# times1    time of transplant/censoring time
+# delta     transplant indicator
+# times2    time to death since the transplant/censoring time
+# time      times1 + times2
+# status    censoring indicator: dead=1, alive=0
+# age       age-48 years
+# year      year of acceptance; in years after 1 Nov 1967
+# surgery   prior bypass surgery; 1=yes
+# -------------------------------------------------------------
+
+# original age column was centred at 48, go back to the original scale
+heart2$age <- heart2$age + 48
+# add new column for age groups
+heart2$age.group <- cut2(heart2$age, c(40,50))
+# add new column for age year of inclusion into WL groups
+heart2$year.group <- cut2(heart2$year, c(2,5))
+
+colnames(heart2)[2] <- "transplant"
+heart2$transplant <- as.factor(heart2$transplant)
+heart2$surgery <- as.factor(heart2$surgery)
+
+
+KaplanMeier <- function(parameter) {
+  expr = paste("survfit(Surv(time, status) ~ ", parameter, ", data = heart2)")
+  fit <- eval(parse(text = expr))
+  # Survival curve
+  surv_curve <- ggsurvplot(
+                            fit,
+                            title = "Kaplan-Meier survival curve",
+                            pval = TRUE,
+                            conf.int = TRUE,
+                            # conf.int.style = "step",
+                            xlab = "Time in days",
+                            break.time.by = 200,
+                            ggtheme = theme_light(),
+                            risk.table = "abs_pct",
+                            risk.table.y.text.col = T,
+                            risk.table.y.text = FALSE,
+                            ncensor.plot = TRUE,
+                            surv.median.line = "hv",
+                            xlim = c(0, 1800)
+                          )
+
+  # Cumulative hazard
+  cumul_haz <- ggsurvplot(
+                            fit,
+                            title = "Cumulative hazard curve",
+                            conf.int = TRUE,
+                            risk.table.col = "strata",
+                            ggtheme = theme_bw(),
+                            fun = "cumhaz"
+                        )
+  return(list(survival = surv_curve, hazard = cumul_haz))
+}
+
+graphs <- KaplanMeier("age.group")
+graphs$survival
+```
+
+[Reference about Kaplan-Meier Survival Estimate](http://www.sthda.com/english/wiki/survival-analysis-basics)
+
+
+
+## Cox Proportional-Hazards Model
+
+<div style="text-align: justify">
+On the second tab a user can see a survival curve built with 
+Cox Proportional-Hazards Model, model summary and the predicted curve based on 
+the user's input. Regressors that a user wants to include in the model can be 
+selected with the tick-boxes on the left panel. Model summary is given below 
+the curve and contains useful information such as coefficient values and results 
+of statistical tests. Survival curve for a new patient will be drawn at the 
+bottom where input values are specified on the left panel under 'Prediction' 
+section. Only regressors included in the model will have an effect on prediction 
+despite other existing input values.
+
+Below is an example of a Cox PH curve of a univariate model for Transplant
+variable.
+</div>
+
+```{r warning=FALSE, message=FALSE, out.width="30%", fig.align='center'}
+res.cox = coxph(Surv(time, status) ~ transplant, data = heart2)
+df <- with(heart2, data.frame(transplant = c('0', '1')))
+
+ggsurvplot(survfit(res.cox, newdata = df), data = heart2,
+           ggtheme = theme_minimal(), legend.labs = c("Transplant=No",
+                                                      "Transplant=Yes"))
+```
+
+[Reference about Cox Proportional-Hazards Model](http://www.sthda.com/english/wiki/cox-proportional-hazards-model)
+
+
+
